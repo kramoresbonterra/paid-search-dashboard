@@ -302,23 +302,26 @@ function getLatestDataDate(allData) {
 }
 
 // ---------- UI components ----------
-function DeltaBadge({ pct, invert = false }) {
+function DeltaBadge({ pct, invert = false, prevLabel }) {
   if (pct === null || pct === undefined) return React.createElement('span', { style: { color: 'var(--ink-muted)', fontSize: 13, fontWeight: 500 } }, '—');
   const good = invert ? pct < 0 : pct > 0;
   const flat = Math.abs(pct) < 0.02;
   const color = flat ? 'var(--ink-muted)' : (good ? 'var(--good)' : 'var(--alert)');
   const arrow = flat ? '→' : (pct > 0 ? '↑' : '↓');
-  return React.createElement('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 4, color, fontSize: 13, fontWeight: 600 } }, arrow + ' ' + fmtDelta(pct));
+  return React.createElement('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 4, color, fontSize: 13, fontWeight: 600 } },
+    arrow + ' ' + fmtDelta(pct),
+    prevLabel !== undefined && React.createElement('span', { style: { color: 'var(--ink-muted)', fontWeight: 500 } }, ` (vs ${prevLabel})`)
+  );
 }
 
-function KpiCard({ label, value, delta, invert, sub }) {
+function KpiCard({ label, value, delta, invert, sub, prevLabel }) {
   return React.createElement('div', {
     style: { background: 'var(--panel)', border: '1px solid var(--border)', borderRadius: 10, padding: '16px 18px', flex: 1, minWidth: 140 }
   },
     React.createElement('div', { style: { fontSize: 12.5, color: 'var(--ink-muted)', fontWeight: 500, marginBottom: 6 } }, label),
     React.createElement('div', { style: { fontSize: 24, fontWeight: 650, color: 'var(--ink)', letterSpacing: '-0.01em', lineHeight: 1.1 } }, value),
     React.createElement('div', { style: { marginTop: 6, display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
-      React.createElement(DeltaBadge, { pct: delta, invert }),
+      React.createElement(DeltaBadge, { pct: delta, invert, prevLabel }),
       sub && React.createElement('span', { style: { fontSize: 11.5, color: 'var(--ink-muted)' } }, sub)
     )
   );
@@ -458,12 +461,12 @@ function CampaignCard({ rows, campaignName, start, end, prevStart, prevEnd, hasK
           React.createElement('div', { style: { fontSize: 11.5, color: 'var(--ink-muted)' } }, primaryMetric.label),
           React.createElement('div', { style: { fontSize: 15, fontWeight: 650, color: 'var(--ink)' } }, fmtNum(primaryMetric.curr, 1))
         ),
-        React.createElement('div', { style: { minWidth: 60, textAlign: 'right' } }, React.createElement(DeltaBadge, { pct: delta })),
+        React.createElement('div', { style: { minWidth: 60, textAlign: 'right' } }, React.createElement(DeltaBadge, { pct: delta, prevLabel: fmtNum(primaryMetric.prev, 1) })),
         React.createElement('div', { style: { textAlign: 'right' } },
           React.createElement('div', { style: { fontSize: 11.5, color: 'var(--ink-muted)' } }, 'Spend'),
           React.createElement('div', { style: { fontSize: 15, fontWeight: 650, color: 'var(--ink)' } }, fmtCurrency(curr.cost))
         ),
-        React.createElement('div', { style: { minWidth: 60, textAlign: 'right' } }, React.createElement(DeltaBadge, { pct: costDelta, invert: true })),
+        React.createElement('div', { style: { minWidth: 60, textAlign: 'right' } }, React.createElement(DeltaBadge, { pct: costDelta, invert: true, prevLabel: fmtCurrency(prev.cost) })),
         React.createElement('span', { style: { color: 'var(--ink-muted)', fontSize: 14 } }, expanded ? '▲' : '▼')
       )
     ),
@@ -508,13 +511,14 @@ function PlatformSection({ platformKey, rows, start, end, prevStart, prevEnd }) 
       isCmPlatform && React.createElement('span', { style: { fontSize: 11.5, color: 'var(--ink-muted)' } }, 'CM totals (Non-Brand + Brand) — Brand Terms tracked separately below')
     ),
     isCmPlatform && React.createElement('div', { style: { display: 'flex', gap: 12, marginBottom: 14, flexWrap: 'wrap' } },
-      React.createElement(KpiCard, { label: primaryLabel, value: fmtNum(primaryCurr, 1), delta: pctChange(primaryCurr, primaryPrev) }),
-      React.createElement(KpiCard, { label: 'Spend', value: fmtCurrency(cmCurrTotal.cost), delta: pctChange(cmCurrTotal.cost, cmPrevTotal.cost), invert: true }),
+      React.createElement(KpiCard, { label: primaryLabel, value: fmtNum(primaryCurr, 1), delta: pctChange(primaryCurr, primaryPrev), prevLabel: fmtNum(primaryPrev, 1) }),
+      React.createElement(KpiCard, { label: 'Spend', value: fmtCurrency(cmCurrTotal.cost), delta: pctChange(cmCurrTotal.cost, cmPrevTotal.cost), invert: true, prevLabel: fmtCurrency(cmPrevTotal.cost) }),
       React.createElement(KpiCard, {
         label: 'Cost / Demo',
         value: primaryCurr > 0 ? fmtCurrency(cmCurrTotal.cost / primaryCurr) : '--',
         delta: pctChange(primaryCurr > 0 ? cmCurrTotal.cost / primaryCurr : null, primaryPrev > 0 ? cmPrevTotal.cost / primaryPrev : null),
-        invert: true
+        invert: true,
+        prevLabel: primaryPrev > 0 ? fmtCurrency(cmPrevTotal.cost / primaryPrev) : '--'
       })
     ),
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
@@ -558,12 +562,12 @@ function OverviewStrip({ allData, start, end, prevStart, prevEnd }) {
         React.createElement('div', null,
           React.createElement('div', { style: { fontSize: 11, color: 'var(--ink-muted)' } }, `CM ${primaryLabel}`),
           React.createElement('div', { style: { fontSize: 18, fontWeight: 650 } }, fmtNum(primaryCurr, 1)),
-          React.createElement(DeltaBadge, { pct: pctChange(primaryCurr, primaryPrev) })
+          React.createElement(DeltaBadge, { pct: pctChange(primaryCurr, primaryPrev), prevLabel: fmtNum(primaryPrev, 1) })
         ),
         React.createElement('div', null,
           React.createElement('div', { style: { fontSize: 11, color: 'var(--ink-muted)' } }, 'CM Spend'),
           React.createElement('div', { style: { fontSize: 18, fontWeight: 650 } }, fmtCurrency(summary.cmCurr.cost)),
-          React.createElement(DeltaBadge, { pct: pctChange(summary.cmCurr.cost, summary.cmPrev.cost), invert: true })
+          React.createElement(DeltaBadge, { pct: pctChange(summary.cmCurr.cost, summary.cmPrev.cost), invert: true, prevLabel: fmtCurrency(summary.cmPrev.cost) })
         )
       )
     );
@@ -582,12 +586,12 @@ function OverviewStrip({ allData, start, end, prevStart, prevEnd }) {
         React.createElement('div', null,
           React.createElement('div', { style: { fontSize: 11, color: 'var(--ink-muted)' } }, primaryLabel),
           React.createElement('div', { style: { fontSize: 18, fontWeight: 650 } }, fmtNum(primaryCurr, 1)),
-          React.createElement(DeltaBadge, { pct: pctChange(primaryCurr, primaryPrev) })
+          React.createElement(DeltaBadge, { pct: pctChange(primaryCurr, primaryPrev), prevLabel: fmtNum(primaryPrev, 1) })
         ),
         React.createElement('div', null,
           React.createElement('div', { style: { fontSize: 11, color: 'var(--ink-muted)' } }, 'Spend'),
           React.createElement('div', { style: { fontSize: 18, fontWeight: 650 } }, fmtCurrency(summary.btCurr.cost)),
-          React.createElement(DeltaBadge, { pct: pctChange(summary.btCurr.cost, summary.btPrev.cost), invert: true })
+          React.createElement(DeltaBadge, { pct: pctChange(summary.btCurr.cost, summary.btPrev.cost), invert: true, prevLabel: fmtCurrency(summary.btPrev.cost) })
         )
       )
     );
@@ -619,12 +623,12 @@ function OverviewStrip({ allData, start, end, prevStart, prevEnd }) {
           React.createElement('div', null,
             React.createElement('div', { style: { fontSize: 11, color: 'var(--ink-muted)' } }, 'Conversions'),
             React.createElement('div', { style: { fontSize: 18, fontWeight: 650 } }, fmtNum(ngpvanCurrTotal.conversions, 1)),
-            React.createElement(DeltaBadge, { pct: pctChange(ngpvanCurrTotal.conversions, ngpvanPrevTotal.conversions) })
+            React.createElement(DeltaBadge, { pct: pctChange(ngpvanCurrTotal.conversions, ngpvanPrevTotal.conversions), prevLabel: fmtNum(ngpvanPrevTotal.conversions, 1) })
           ),
           React.createElement('div', null,
             React.createElement('div', { style: { fontSize: 11, color: 'var(--ink-muted)' } }, 'Spend'),
             React.createElement('div', { style: { fontSize: 18, fontWeight: 650 } }, fmtCurrency(ngpvanCurrTotal.cost)),
-            React.createElement(DeltaBadge, { pct: pctChange(ngpvanCurrTotal.cost, ngpvanPrevTotal.cost), invert: true })
+            React.createElement(DeltaBadge, { pct: pctChange(ngpvanCurrTotal.cost, ngpvanPrevTotal.cost), invert: true, prevLabel: fmtCurrency(ngpvanPrevTotal.cost) })
           )
         )
       )
