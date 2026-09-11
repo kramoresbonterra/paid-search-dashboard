@@ -341,29 +341,67 @@ function AlertRow({ alert }) {
   );
 }
 
-function CampaignTrend({ rows, campaignName, start, end, metricField, metricLabel }) {
+function CampaignTrend({ rows, campaignName, start, end, metricKey, metricLabel }) {
   const chartData = useMemo(() => {
     return rows.filter(r => r.campaign === campaignName && inRange(r.date, start, end))
       .sort((a, b) => a.date.localeCompare(b.date))
-      .map(r => ({ date: fmtShort(r.date), value: (r[metricField] !== undefined && r[metricField] !== null) ? r[metricField] : 0 }));
-  }, [rows, campaignName, start, end, metricField]);
+      .map(r => ({ date: fmtShort(r.date), value: computeMetricForRow(r, metricKey) }));
+  }, [rows, campaignName, start, end, metricKey]);
 
   if (chartData.length === 0) return React.createElement('div', { style: { fontSize: 12.5, color: 'var(--ink-muted)', padding: '20px 0' } }, 'No data in this range.');
+
+  const isPercentMetric = PERCENT_METRIC_KEYS.includes(metricKey);
+  const isCurrencyMetric = CURRENCY_METRIC_KEYS.includes(metricKey);
 
   return React.createElement(ResponsiveContainer, { width: '100%', height: 140 },
     React.createElement(LineChart, { data: chartData, margin: { top: 6, right: 8, left: -20, bottom: 0 } },
       React.createElement(CartesianGrid, { strokeDasharray: '3 3', stroke: 'var(--border)', vertical: false }),
       React.createElement(XAxis, { dataKey: 'date', tick: { fontSize: 10.5, fill: 'var(--ink-muted)' }, axisLine: { stroke: 'var(--border)' }, tickLine: false, interval: 'preserveStartEnd' }),
       React.createElement(YAxis, { tick: { fontSize: 10.5, fill: 'var(--ink-muted)' }, axisLine: false, tickLine: false, width: 30 }),
-      React.createElement(Tooltip, { contentStyle: { fontSize: 12.5, borderRadius: 8, border: '1px solid var(--border)' }, formatter: (v) => [fmtNum(v, 1), metricLabel] }),
+      React.createElement(Tooltip, {
+        contentStyle: { fontSize: 12.5, borderRadius: 8, border: '1px solid var(--border)' },
+        formatter: (v) => [isPercentMetric ? fmtPct(v, 2) : isCurrencyMetric ? fmtCurrency(v) : fmtNum(v, 1), metricLabel]
+      }),
       React.createElement(Line, { type: 'monotone', dataKey: 'value', stroke: 'var(--accent)', strokeWidth: 2, dot: false, activeDot: { r: 4 } })
     )
   );
 }
 
-function MiniStat({ label, value }) {
-  return React.createElement('div', null,
-    React.createElement('div', { style: { fontSize: 11, color: 'var(--ink-muted)', marginBottom: 2 } }, label),
+// Metrics whose per-row "trend" value is a ratio computed from two raw fields
+// on that same row, not a raw field itself. Each entry maps metricKey -> a
+// function that computes that day's value from a single row.
+const DERIVED_METRIC_KEYS = {
+  ctr: (r) => (r.impr && r.impr > 0) ? (r.clicks || 0) / r.impr : null,
+  convRate: (r) => (r.clicks && r.clicks > 0) ? (r.conversions || 0) / r.clicks : null,
+  avgCpcDerived: (r) => (r.clicks && r.clicks > 0) ? (r.cost || 0) / r.clicks : null,
+  demoRequestCvr: (r) => (r.clicks && r.clicks > 0 && r.demoRequest !== null && r.demoRequest !== undefined) ? r.demoRequest / r.clicks : null,
+  malToSqlRate: (r) => (r.mals && r.mals > 0 && r.sqlOpen !== null && r.sqlOpen !== undefined) ? r.sqlOpen / r.mals : null,
+  costPerSql: (r) => (r.sqlOpen && r.sqlOpen > 0) ? (r.cost || 0) / r.sqlOpen : null,
+  costPerConv: (r) => (r.conversions && r.conversions > 0) ? (r.cost || 0) / r.conversions : null
+};
+
+const PERCENT_METRIC_KEYS = ['ctr', 'convRate', 'demoRequestCvr', 'malToSqlRate'];
+const CURRENCY_METRIC_KEYS = ['avgCpcDerived', 'costPerSql', 'costPerConv', 'cost'];
+
+function computeMetricForRow(row, metricKey) {
+  if (DERIVED_METRIC_KEYS[metricKey]) {
+    const v = DERIVED_METRIC_KEYS[metricKey](row);
+    return v === null || v === undefined ? 0 : v;
+  }
+  const v = row[metricKey];
+  return (v === null || v === undefined) ? 0 : v;
+}
+
+function MiniStat({ label, value, active, onClick }) {
+  return React.createElement('button', {
+    onClick,
+    style: {
+      textAlign: 'left', background: active ? 'var(--accent-bg)' : 'transparent',
+      border: active ? '1px solid var(--accent)' : '1px solid transparent',
+      borderRadius: 7, padding: '6px 8px', margin: '-6px -8px', cursor: 'pointer'
+    }
+  },
+    React.createElement('div', { style: { fontSize: 11, color: active ? 'var(--accent)' : 'var(--ink-muted)', marginBottom: 2, fontWeight: active ? 650 : 400 } }, label),
     React.createElement('div', { style: { fontSize: 14, fontWeight: 600, color: 'var(--ink)' } }, value)
   );
 }
@@ -374,10 +412,36 @@ function CampaignCard({ rows, campaignName, start, end, prevStart, prevEnd, hasK
   const prev = aggregateCampaign(rows, campaignName, prevStart, prevEnd);
   const paused = isCampaignPaused(rows, campaignName);
   const primaryMetric = curr.demoRequest !== null
-    ? { label: 'Demo Requests', curr: curr.demoRequest, prev: prev.demoRequest }
-    : { label: 'Conversions', curr: curr.conversions, prev: prev.conversions };
+    ? { label: 'Demo Requests', curr: curr.demoRequest, prev: prev.demoRequest, key: 'demoRequest' }
+    : { label: 'Conversions', curr: curr.conversions, prev: prev.conversions, key: 'conversions' };
   const delta = pctChange(primaryMetric.curr, primaryMetric.prev);
   const costDelta = pctChange(curr.cost, prev.cost);
+
+  // Which metric's trend is currently shown in the chart. Defaults to the
+  // card's primary metric; clicking any KPI below switches it.
+  const [selectedMetric, setSelectedMetric] = useState({ key: primaryMetric.key, label: primaryMetric.label });
+
+  const statDefs = [
+    { key: 'clicks', label: 'Clicks', value: fmtNum(curr.clicks) },
+    { key: 'impr', label: 'Impressions', value: fmtNum(curr.impr) },
+    { key: 'ctr', label: 'CTR', value: fmtPct(curr.ctr, 2) },
+    { key: 'avgCpcDerived', label: 'Avg CPC', value: curr.clicks > 0 ? fmtCurrency(curr.cost / curr.clicks) : '--' }
+  ];
+  if (hasKpiBreakdown && curr.demoRequest !== null) {
+    statDefs.push(
+      { key: 'demoRequestCvr', label: 'Demo Req. CVR', value: fmtPct(curr.demoRequestCvr, 2) },
+      { key: 'meetingBooked', label: 'Meeting Booked', value: fmtNum(curr.meetingBooked, 1) },
+      { key: 'sqlOpen', label: 'SQL Open', value: fmtNum(curr.sqlOpen, 1) },
+      { key: 'mals', label: 'MALs', value: fmtNum(curr.mals, 1) },
+      { key: 'malToSqlRate', label: 'MAL to SQL Rate', value: fmtPct(curr.malToSqlRate, 1) },
+      { key: 'costPerSql', label: 'Cost / SQL', value: curr.costPerSql !== null ? fmtCurrency(curr.costPerSql) : '--' }
+    );
+  } else if (!hasKpiBreakdown) {
+    statDefs.push(
+      { key: 'convRate', label: 'Conv. Rate', value: fmtPct(curr.convRate, 2) },
+      { key: 'costPerConv', label: 'Cost / Conv.', value: curr.costPerConv !== null ? fmtCurrency(curr.costPerConv) : '--' }
+    );
+  }
 
   return React.createElement('div', { style: { background: 'var(--panel)', border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden', opacity: paused ? 0.75 : 1 } },
     React.createElement('button', {
@@ -404,26 +468,15 @@ function CampaignCard({ rows, campaignName, start, end, prevStart, prevEnd, hasK
       )
     ),
     expanded && React.createElement('div', { style: { padding: '0 18px 18px', borderTop: '1px solid var(--border)' } },
-      React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(100px, 1fr))', gap: 10, margin: '14px 0' } },
-        React.createElement(MiniStat, { label: 'Clicks', value: fmtNum(curr.clicks) }),
-        React.createElement(MiniStat, { label: 'Impressions', value: fmtNum(curr.impr) }),
-        React.createElement(MiniStat, { label: 'CTR', value: fmtPct(curr.ctr, 2) }),
-        React.createElement(MiniStat, { label: 'Avg CPC', value: curr.clicks > 0 ? fmtCurrency(curr.cost / curr.clicks) : '--' }),
-        hasKpiBreakdown && curr.demoRequest !== null && React.createElement(React.Fragment, null,
-          React.createElement(MiniStat, { label: 'Demo Req. CVR', value: fmtPct(curr.demoRequestCvr, 2) }),
-          React.createElement(MiniStat, { label: 'Meeting Booked', value: fmtNum(curr.meetingBooked, 1) }),
-          React.createElement(MiniStat, { label: 'SQL Open', value: fmtNum(curr.sqlOpen, 1) }),
-          React.createElement(MiniStat, { label: 'MALs', value: fmtNum(curr.mals, 1) }),
-          React.createElement(MiniStat, { label: 'MAL to SQL Rate', value: fmtPct(curr.malToSqlRate, 1) }),
-          React.createElement(MiniStat, { label: 'Cost / SQL', value: curr.costPerSql !== null ? fmtCurrency(curr.costPerSql) : '--' })
-        ),
-        !hasKpiBreakdown && React.createElement(React.Fragment, null,
-          React.createElement(MiniStat, { label: 'Conv. Rate', value: fmtPct(curr.convRate, 2) }),
-          React.createElement(MiniStat, { label: 'Cost / Conv.', value: curr.costPerConv !== null ? fmtCurrency(curr.costPerConv) : '--' })
-        )
+      React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 14, margin: '14px 0' } },
+        statDefs.map(s => React.createElement(MiniStat, {
+          key: s.key, label: s.label, value: s.value,
+          active: selectedMetric.key === s.key,
+          onClick: () => setSelectedMetric({ key: s.key, label: s.label })
+        }))
       ),
-      React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--ink-muted)', marginBottom: 4 } }, primaryMetric.label + ' trend'),
-      React.createElement(CampaignTrend, { rows, campaignName, start, end, metricField: curr.demoRequest !== null ? 'demoRequest' : 'conversions', metricLabel: primaryMetric.label })
+      React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--ink-muted)', marginBottom: 4 } }, selectedMetric.label + ' trend'),
+      React.createElement(CampaignTrend, { rows, campaignName, start, end, metricKey: selectedMetric.key, metricLabel: selectedMetric.label })
     )
   );
 }
@@ -512,10 +565,30 @@ function OverviewStrip({ allData, start, end, prevStart, prevEnd }) {
           React.createElement('div', { style: { fontSize: 18, fontWeight: 650 } }, fmtCurrency(summary.cmCurr.cost)),
           React.createElement(DeltaBadge, { pct: pctChange(summary.cmCurr.cost, summary.cmPrev.cost), invert: true })
         )
+      )
+    );
+  }
+
+  function brandTermsBlock(label, summary) {
+    const primaryCurr = summary.btCurr.hasDemoRequest ? summary.btCurr.demoRequest : summary.btCurr.conversions;
+    const primaryPrev = summary.btPrev.hasDemoRequest ? summary.btPrev.demoRequest : summary.btPrev.conversions;
+    const primaryLabel = summary.btCurr.hasDemoRequest ? 'Demo Req.' : 'Conv.';
+    return React.createElement('div', { style: { background: 'var(--panel)', border: '1px solid var(--border)', borderRadius: 10, padding: '14px 16px', flex: 1, minWidth: 220 } },
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 } },
+        React.createElement('span', { style: { fontSize: 13, fontWeight: 650, color: 'var(--ink)' } }, label),
+        React.createElement('span', { style: { fontSize: 10, fontWeight: 650, color: 'var(--ink-muted)', border: '1px solid var(--border)', borderRadius: 5, padding: '1px 6px' } }, 'not in CM totals')
       ),
-      React.createElement('div', { style: { marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
-        React.createElement('span', { style: { fontSize: 11, color: 'var(--ink-muted)' } }, 'Brand Terms spend (separate)'),
-        React.createElement('span', { style: { fontSize: 13, fontWeight: 600 } }, fmtCurrency(summary.btCurr.cost))
+      React.createElement('div', { style: { display: 'flex', gap: 16 } },
+        React.createElement('div', null,
+          React.createElement('div', { style: { fontSize: 11, color: 'var(--ink-muted)' } }, primaryLabel),
+          React.createElement('div', { style: { fontSize: 18, fontWeight: 650 } }, fmtNum(primaryCurr, 1)),
+          React.createElement(DeltaBadge, { pct: pctChange(primaryCurr, primaryPrev) })
+        ),
+        React.createElement('div', null,
+          React.createElement('div', { style: { fontSize: 11, color: 'var(--ink-muted)' } }, 'Spend'),
+          React.createElement('div', { style: { fontSize: 18, fontWeight: 650 } }, fmtCurrency(summary.btCurr.cost)),
+          React.createElement(DeltaBadge, { pct: pctChange(summary.btCurr.cost, summary.btPrev.cost), invert: true })
+        )
       )
     );
   }
@@ -525,6 +598,8 @@ function OverviewStrip({ allData, start, end, prevStart, prevEnd }) {
     React.createElement('div', { style: { display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 12 } },
       channelBlock('Google Ads', google),
       channelBlock('Microsoft Ads', microsoft),
+      brandTermsBlock('Google Brand Terms', google),
+      brandTermsBlock('Microsoft Brand Terms', microsoft),
       React.createElement('div', { style: { background: 'var(--panel)', border: '1px solid var(--border)', borderRadius: 10, padding: '14px 16px', flex: 1, minWidth: 220 } },
         React.createElement('div', { style: { fontSize: 13, fontWeight: 650, color: 'var(--ink)', marginBottom: 10 } }, 'Demand Gen (Google only)'),
         React.createElement('div', { style: { display: 'flex', gap: 16 } },
